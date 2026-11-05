@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 
-VERSION = 2
+VERSION = 3
 
 
 def charger(chemin: str) -> dict:

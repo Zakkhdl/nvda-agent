@@ -1,114 +1,117 @@
-# Agent de signaux NVIDIA (NVDA)
+# Agent de swing trading (NVIDIA + liste de valeurs)
 
-Agent qui analyse NVIDIA toutes les 5 minutes pendant la séance de Wall Street, comme le ferait un trader : plusieurs unités de temps, contexte de marché, événements, gestion du risque. Il t'envoie ses alertes sur iPhone via l'app ntfy.
+Chaque soir après la clôture de Wall Street, l'agent analyse NVIDIA et une liste de grandes valeurs tech. Il t'envoie sur iPhone (app ntfy) uniquement ce qu'il y a à faire : un achat pour le lendemain, un stop à remonter, une vente.
 
-Signaux techniques uniquement. Ce n'est pas un conseil en investissement.
+- Horizon : quelques semaines (8 semaines au maximum).
+- Achats seulement : pas de vente à découvert, compatible avec tous les courtiers.
+- Signaux techniques uniquement. Ce n'est pas un conseil en investissement.
 
-## Ta journée type (heure de Paris)
+## Ce que tu reçois
 
-| Heure | Message |
+L'analyse tombe vers **22h37 (heure de Paris) en hiver**, 23h37 en été. Pas d'alerte s'il n'y a rien à faire.
+
+| Alerte | Ce que tu fais |
 |---|---|
-| 15h05 à 15h30 | 🌅 **Avant l'ouverture** : pré-marché, futures Nasdaq, VIX, niveaux clés, annonces du jour, actus, biais technique |
-| 15h30 à 22h00 | 🟢 / 🔴 **Signal** avec entrée, stop, 2 objectifs, taille de position, raisons pour et contre |
-| Pendant la séance | 🎯 **Objectif 1 atteint** (stop remonté au prix d'entrée), 🏆 objectif 2, ❌ stop, 🔔 sortie de fin de séance |
-| Pendant la séance | ⚡ **Mouvement brusque** (plus de 2,5 % en 30 min) avec la dernière actu |
-| 22h00 à 22h45 | 📊 **Bilan** : séance, signaux du jour et résultats, performance des 20 derniers signaux |
+| 🟢 **ACHAT** | Le lendemain : achat à l'ouverture, puis tu poses le stop indiqué tout de suite |
+| ✅ Achat exécuté | Confirmation avec l'objectif recalculé sur le vrai prix d'ouverture |
+| ⛔ Achat annulé | L'ouverture était trop haute : tu n'achètes pas |
+| 🎯 **Objectif 1 atteint** | Tu vends la moitié et tu remontes le stop au prix d'entrée |
+| ⬆️ **Remonte ton stop** | Tu modifies ton ordre stop chez ton courtier |
+| ❌ / 🏆 Sortie | Le stop a été touché : la position est close |
+| 🔔 **Vends demain** | 8 semaines écoulées : vente à l'ouverture |
+| ⚠️ Résultats à venir | L'entreprise publie bientôt : tu décides d'alléger ou non |
+| 📊 Bilan du vendredi | Marché, positions, classement de force relative, agenda des 2 semaines |
 
-Toucher une alerte ouvre le graphique NVDA sur TradingView.
+Toucher une alerte ouvre le graphique sur TradingView.
 
-Deux fois par an, pendant environ 2 semaines (mars et fin octobre), tout est décalé d'une heure plus tôt. L'agent le gère seul.
+## Comment appliquer un signal
 
-## Ce que l'agent analyse
+1. Le soir : tu reçois l'alerte ACHAT avec le prix maximum à l'ouverture, le stop et l'objectif.
+2. Le lendemain à 15h30 : achat au marché à l'ouverture. Si l'ouverture dépasse le prix maximum indiqué, tu n'achètes pas.
+3. Juste après l'achat : ordre **stop** de vente au niveau indiqué. Il te protège même si tu ne regardes pas.
+4. Ordre **limite** de vente sur la moitié des actions à l'objectif 1. Optionnel mais pratique.
+5. Ensuite, tu suis les alertes : stop à remonter, vente à 8 semaines.
 
-**5 configurations de trading**, chacune en achat et en vente :
+## La stratégie
 
-- **Rebond dans la tendance** : repli sur la moyenne 21 ou le VWAP dans une tendance, puis reprise.
-- **Cassure du range d'ouverture** : première clôture au-delà du plus haut ou du plus bas des 30 premières minutes.
-- **Cassure du niveau de la veille** : première clôture au-delà du plus haut ou du plus bas de la veille.
-- **Faux départ repris** : le niveau de la veille est enfoncé puis repris avec force (piège à vendeurs ou à acheteurs).
-- **Retour vers la moyenne** : excès sous ou au-dessus des bandes VWAP, RSI extrême, puis retournement.
+**3 configurations d'achat**, toutes dans une tendance haussière (cours au-dessus de la moyenne 200 jours, qui monte) :
 
-**Une note sur 100**, qui part de 50 et s'ajuste avec 18 facteurs :
+- **Repli dans une tendance haussière** : le cours revient vers sa moyenne 20 jours ou se détend (RSI), puis repart avec une clôture au-dessus du plus haut de la veille. C'est la configuration principale.
+- **Cassure d'un plus haut de 50 séances**, avec un volume au moins 1,4 fois supérieur à la moyenne.
+- **Reprise de la moyenne 50 jours** après une correction.
 
-- Tendance de fond (moyennes 50 et 200 jours) et tendance 15 minutes
-- Force de la tendance (ADX), adaptée au type de configuration
-- Nasdaq 100 (QQQ) et semi-conducteurs (SMH) dans le même sens ou non
-- Force relative de NVIDIA face à son secteur
-- Volume comparé à la normale **de la même heure** (le volume intraday suit une courbe en U)
-- Divergences RSI, momentum MACD, extension par rapport au VWAP
-- Place disponible jusqu'au prochain obstacle (niveaux de la veille, de la séance, 20 jours, moyennes mobiles)
-- Taille du stop, heure de la journée, VIX
-- Résultats NVIDIA (la veille, le jour J, le lendemain) et annonces macro (Fed, inflation, emploi)
-- Historique récent de la configuration sur les 60 dernières séances, recalculé chaque matin
+**Une note sur 100** qui tient compte de : tendance du Nasdaq, tendance des semi-conducteurs, force relative sur 6 mois face au Nasdaq, moyenne 30 semaines, force de la tendance (ADX), distance au plus haut annuel, volume, surextension, RSI, largeur du stop, publication de résultats imminente. Un signal part à partir de 60. Note A à partir de 75.
 
-Un signal part si la note atteint 65 (note B) ou 80 (note A). Si achat et vente sont trop proches, l'agent s'abstient.
+**Gestion du risque** :
 
-## Gestion du risque intégrée
+- Stop entre 1,5 et 3,5 fois la volatilité journalière, sous le dernier creux.
+- Taille calculée pour perdre 1 % du capital si le stop est touché, et 25 % du capital au maximum par valeur.
+- Objectif 1 à 2 R (2 fois la distance au stop) : vente de la moitié, stop au prix d'entrée.
+- Stop suiveur : plus haute clôture moins 3 fois la volatilité. Il ne redescend jamais.
+- 5 positions au maximum, 2 nouveaux achats par jour au maximum.
+- Pas de nouvel achat à moins de 5 séances d'une publication de résultats.
 
-- **Stop** placé sous la structure (plus bas récent, milieu du range) et jamais à moins de 2,5 fois la volatilité 5 minutes.
-- **Objectif 1** à 1 R (R = distance entrée-stop). Plan : sortir la moitié, remonter le stop au prix d'entrée.
-- **Objectif 2** à 2 R, ou juste avant le prochain obstacle s'il est entre 1,2 et 2,5 R.
-- **Une seule position suivie à la fois**, 4 signaux maximum par séance, aucune position gardée le soir.
-- **Taille de position** calculée si tu renseignes ton capital (voir Réglages).
+## Résultats sur 20 ans (2006 à novembre 2026)
 
-## Ce que disent les tests (à lire avant de trader)
+Backtest avec exactement les règles ci-dessus, frais de 0,10 % par ordre inclus.
 
-Mesuré le 5 novembre 2026 sur les 60 dernières séances, frais de 0,03 % inclus :
+| | Par an | Pire baisse | Capital investi en moyenne |
+|---|---|---|---|
+| **Stratégie** (10 valeurs suivies) | **7,0 %** | **-27 %** | 44 % |
+| Nasdaq 100 (QQQ) gardé en permanence | 15,0 % | -53 % | 100 % |
+| Les 10 valeurs gardées à parts égales | 27,3 % | -67 % | 100 % |
 
-- **NVIDIA** : 33 signaux, 45 % gagnants, espérance -0,02 R par signal. Soit l'équilibre.
-- **Validation sur 4 autres valeurs** du secteur (AMD, Broadcom, TSMC, Micron) pour éviter de sur-optimiser NVIDIA : résultats entre -0,08 R et +0,23 R par signal.
-- La note ne prédit pas mieux le résultat quand elle monte. Les seuls facteurs qui aident nettement sur les 5 valeurs : un volume au moins 2 fois supérieur à la normale et une tendance très forte (ADX au-dessus de 35).
+Les signaux un par un :
 
-Conclusion directe : aucun ensemble de règles techniques ne bat le marché de façon fiable en intraday. L'agent te fait gagner du temps, structure tes décisions et protège ton capital. Il ne remplace pas ton jugement.
+- 889 signaux, 41 % gagnants, **+0,20 R en moyenne** par signal (soit +1,1 % par position).
+- Positif sur les 10 valeurs, et sur les deux périodes : +0,11 R de 2006 à 2015, +0,27 R depuis 2016.
+- **Contrôle sur 15 autres valeurs**, dont des perdantes (Intel, Cisco, IBM, General Electric, Pfizer) : +0,16 R par signal. L'avantage ne vient donc pas seulement du choix de valeurs gagnantes.
+- La configuration « cassure » est la moins fiable (-0,08 R sur 20 ans). Sa note est réduite de 8 points.
 
-Recommandations :
+**Ce qu'il faut en retenir, sans enjoliver :**
 
-- Suis les signaux **sans argent réel pendant 3 à 4 semaines**. Le bilan du soir tient les comptes.
-- Ensuite, risque au maximum **0,5 à 1 % de ton capital** par signal.
-- Relance le backtest une fois par mois (voir plus bas).
+- La stratégie a un vrai avantage par signal, mais elle gagne **moins que garder le Nasdaq** sur 20 ans. Elle n'est investie que 44 % du temps et ne risque que 1 % par position.
+- En échange, sa pire baisse est **deux fois plus faible**, et ton capital est libre plus de la moitié du temps.
+- Les 10 valeurs suivies ont été choisies aujourd'hui, en sachant qu'elles ont énormément monté. Leurs chiffres d'achat-conservation sont donc flatteurs (biais du survivant).
+- Pour plus de rendement, tu peux monter le risque par position : à 2 %, environ +9,5 % par an mais une pire baisse vers -38 %.
+- Le passé ne garantit rien. Commence par suivre les signaux **sans argent réel pendant 1 à 2 mois**.
 
-## Installation
+Relance le backtest quand tu veux : onglet Actions, mode `backtest`.
 
-1. App **ntfy** sur ton iPhone, abonnée à ton canal secret.
-2. Dans le dépôt GitHub : **Settings > Secrets and variables > Actions**.
-   - Onglet **Secrets** : `NTFY_TOPIC` = ton nom de canal. Optionnel : `TWELVEDATA_API_KEY` (clé gratuite sur twelvedata.com, plus fiable que Yahoo depuis GitHub).
-   - Onglet **Variables** : les réglages ci-dessous, si tu veux changer les valeurs par défaut.
-3. Onglet **Actions > Agent NVDA > Run workflow** : mode `test` pour recevoir une notification, mode `force` pour une analyse immédiate, mode `backtest` pour la mesure sur 60 séances (résultat dans le journal de l'exécution).
-
-## Réglages (variables GitHub)
+## Réglages (Settings > Secrets and variables > Actions > Variables)
 
 | Variable | Défaut | Effet |
 |---|---|---|
-| `CAPITAL_EUR` | vide | Ton capital en euros. Active le calcul de taille de position. |
-| `RISQUE_PCT` | 1 | % du capital risqué par signal. |
-| `SEUIL_SCORE` | 65 | Note minimum pour alerter. Plus haut = moins de signaux. |
-| `MAX_SIGNAUX_JOUR` | 4 | Nombre maximum de signaux par séance. |
-| `STOP_MIN_ATR` | 2,5 | Distance minimum du stop, en volatilité 5 min. |
-| `FRAIS_PCT` | 0,03 | Tes frais aller-retour en %. Mets la vraie valeur de ton courtier (frais de change compris). |
-| `SEUIL_MOUVEMENT` | 2,5 | % sur 30 min pour l'alerte de mouvement brusque. |
+| `VALEURS` | NVDA,AMD,AVGO,TSM,ASML,MU,MSFT,GOOGL,AMZN,META | Les valeurs suivies, séparées par des virgules (symboles US) |
+| `CAPITAL_EUR` | vide | Ton capital en euros. Active le calcul du nombre d'actions |
+| `RISQUE_PCT` | 1 | % du capital perdu si un stop est touché |
+| `MAX_POSITIONS` | 5 | Positions ouvertes en même temps |
+| `SEUIL_SCORE` | 60 | Note minimum pour un signal d'achat |
+| `DUREE_MAX` | 40 | Durée maximale en séances (40 = 8 semaines) |
+| `OBJECTIF_R` | 2 | Objectif 1 en multiple du risque |
+| `FRAIS_PCT` | 0.1 | Tes frais par ordre en %, change compris |
 
-Utilise un point pour les décimales dans GitHub (par exemple `0.5`).
+Le secret `NTFY_TOPIC` contient ton canal ntfy.
 
-## Calendrier des annonces
+## Modes manuels (onglet Actions > Agent swing > Run workflow)
 
-Le fichier `evenements.json` contient les décisions de la Fed, l'inflation (CPI) et l'emploi jusqu'à fin 2027, d'après les calendriers officiels (federalreserve.gov et bls.gov). Les dates de la Fed pour 2027 sont provisoires. Les dates de résultats NVIDIA sont aussi récupérées automatiquement chaque jour.
+- `test` : notification de test sur ton iPhone.
+- `apercu` : analyse complète de la dernière séance, affichée dans le journal, sans rien envoyer ni modifier.
+- `backtest` : mesure sur 20 ans avec le contrôle sur 15 autres valeurs.
+- `normal` : le passage du soir, lancé à la main.
+
+## Limites
+
+- L'agent suit un **portefeuille modèle** : il suppose que tu appliques tous les signaux. Si tu en sautes un, ignore ses alertes de suivi.
+- Le stop ne protège pas d'un écart à l'ouverture (résultats, annonce surprise). D'où l'alerte avant les résultats.
+- Les cours viennent de Yahoo Finance, ajustés des divisions d'actions et des dividendes.
+- Calendrier macro dans `evenements.json` (Fed, inflation, emploi jusqu'à fin 2027, sources officielles).
 
 ## Sur ton ordinateur (optionnel)
 
 ```bash
 pip install -r requirements.txt
-export NTFY_TOPIC=ton-canal
-python -m nvda_agent --test       # notification de test
-python -m nvda_agent --backtest   # mesure sur 60 séances
-python -m nvda_agent --force --dry-run   # analyse immédiate, sans envoyer
-python -m pytest -q               # 16 tests automatiques
+python -m nvda_agent --force --dry-run   # analyse de la dernière séance, sans envoi
+python -m nvda_agent --backtest          # 20 ans de backtest
+python -m pytest -q                      # 16 tests automatiques
 ```
-
-## Fiabilité
-
-- Aucune donnée du futur dans les calculs : vérifié par un test automatique qui recalcule tout bougie par bougie.
-- Le backtest utilise exactement le même moteur que le suivi en direct.
-- Si les données manquent 3 fois de suite, tu reçois une alerte, puis une autre quand tout repart.
-- Si une cotation est figée plus de 20 minutes, tu es prévenu.
-- GitHub peut décaler une exécution de quelques minutes aux heures chargées. L'agent rattrape les bougies manquées et signale les alertes en retard.
-- Sans activité sur le dépôt pendant 60 jours, GitHub met l'automatisation en pause et t'envoie un mail. Un clic sur **Enable workflow** relance tout.

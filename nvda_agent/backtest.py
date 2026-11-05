@@ -1,102 +1,100 @@
-"""Backtest : rejoue les ~60 dernières séances avec exactement les règles du suivi en direct.
+"""Backtest du portefeuille sur 20 ans, avec les règles exactes du suivi réel.
 
-Deux mesures :
-1. « Brut » : toutes les configurations, sans le facteur « historique ».
-2. « Walk-forward » : chaque jour, le facteur « historique » n'utilise que les séances passées,
-   comme en direct. C'est la mesure honnête de ce que l'agent aurait fait.
+Affiche :
+1. La performance du portefeuille comparée au Nasdaq (QQQ) et à l'achat-conservation des valeurs suivies.
+2. Les statistiques des signaux : par configuration, par valeur, par période.
+3. Un contrôle sur 15 autres valeurs (dont des perdantes) pour mesurer le biais du survivant.
 """
 from __future__ import annotations
+
+import dataclasses
 
 import numpy as np
 import pandas as pd
 
 from . import data as D
-from .agent import dates_resultats, evenements
+from .agent import CLOTURE_OK, resultats_cache
+from .config import NY
 from .config import Config
-from .engine import Moteur, rejouer, stats, stats_par_cle
-from .features import construire
-from .strategy import analyser, choisir_meilleur, nom_setup, points_historique
+from .portfolio import stats
+from .simulation import performances, preparer_tout, simuler
+from .strategy import SETUPS
 from .util import num
 
+CONTROLE = ["AAPL", "INTC", "CSCO", "IBM", "QCOM", "TXN", "ORCL", "ADBE", "CRM", "NFLX", "JPM", "XOM", "KO", "PFE", "GE"]
 
-def _ligne(nom: str, st: dict) -> str:
-    if st.get("n", 0) == 0:
-        return f"{nom:<38}{0:>6}"
+
+def _l(nom: str, st: dict) -> str:
+    if not st.get("n"):
+        return f"{nom:<34}{0:>6}"
     pf = "inf" if st["pf"] == float("inf") else num(st["pf"], 2)
-    return (f"{nom:<38}{st['n']:>6}{num(st['gagnants'], 0) + ' %':>10}{num(st['t1'], 0) + ' %':>9}"
-            f"{num(st['esperance'], 2) + ' R':>11}{num(st['total'], 1) + ' R':>10}{pf:>7}{num(st['dd_max'], 1) + ' R':>9}")
+    return (f"{nom:<34}{st['n']:>6}{num(st['gagnants'], 0) + ' %':>10}{num(st['esperance'], 2) + ' R':>10}"
+            f"{pf:>7}{num(st['rendement_moyen'], 1) + ' %':>10}{num(st['jours'], 0):>8}")
 
 
-def _tableau(titre: str, trades: list[dict]) -> None:
-    print(f"\n{titre}")
-    print(f"{'Configuration':<38}{'Signaux':>6}{'Gagnants':>10}{'Obj. 1':>9}{'Espérance':>11}{'Total':>10}{'PF':>7}{'DD max':>9}")
-    print("-" * 100)
-    for cle, st in stats_par_cle(trades).items():
-        sens = "Achat" if cle.endswith("_L") else "Vente"
-        print(_ligne(f"{sens} : {nom_setup(cle)}", st))
-    print("-" * 100)
-    print(_ligne("TOTAL", stats(trades)))
+def _p(nom: str, p: dict, expo: float | None = None) -> str:
+    e = f"{num(expo, 0)} %" if expo is not None else "100 %"
+    return (f"{nom:<34}{num(p['cagr'], 1) + ' %':>10}{num(p['dd_max'], 1) + ' %':>12}{num(p['sharpe'], 2):>8}"
+            f"{num(p['total'], 0) + ' %':>12}{e:>10}")
 
 
-def walk_forward(f, evts, res, cfg: Config, base_trades: list[dict], min_seances: int = 15) -> list[dict]:
-    """Chaque séance est notée avec un historique calculé uniquement sur les séances précédentes."""
-    sess = np.array([str(x)[:10] for x in f["sess"].to_numpy()])
-    jours = sorted(set(sess))
-    if len(jours) <= min_seances:
-        return []
-    a = analyser(f, evts, res, None, stop_min_atr=cfg.stop_min_atr)
-    for jour in jours[min_seances:]:
-        calib = stats_par_cle([t for t in base_trades if t["sess"] < jour])
-        m = sess == jour
-        for cle, cd in a.cand.items():
-            pts = points_historique(calib.get(cle))
-            if pts:
-                cd["score"][m] = np.clip(cd["score"][m] + pts, 0, 100)
-    choisir_meilleur(a)
-    mo = Moteur(cfg.seuil, cfg.max_trades_jour, cfg.frais_pct)
-    rejouer(a, mo, int(np.searchsorted(sess, jours[min_seances])), len(f))
-    return mo.journal
+def equi_pondere(don: dict, valeurs, debut) -> pd.Series:
+    px = pd.DataFrame({s: don[s]["close"] for s in valeurs if s in don})
+    rets = px / px.shift(1) - 1
+    rets = rets[rets.index >= pd.Timestamp(debut)]
+    return (1 + rets.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
 
 
-def lancer(cfg: Config, csv: str = "backtest_signaux.csv", marche=None) -> dict:
-    mk = marche or D.charger(cfg)
-    f = construire(mk)
-    evts = evenements(cfg)
-    res = dates_resultats(cfg, {}, evts, "") if marche is None else [e["date"] for e in evts if e.get("type") == "RESULTATS"]
-    a = analyser(f, evts, res, None, stop_min_atr=cfg.stop_min_atr)
-    mo = Moteur(cfg.seuil, cfg.max_trades_jour, cfg.frais_pct)
-    rejouer(a, mo, 0, len(f))
-    brut = mo.journal
-    nb_s = len(set(str(x)[:10] for x in f["sess"].to_numpy()))
-    print(f"\nBacktest {cfg.symbol} : {nb_s} séances, du {f.index[0]:%d/%m/%Y} au {f.index[-1]:%d/%m/%Y} ({mk.source})")
-    print(f"Seuil {cfg.seuil}/100, {cfg.max_trades_jour} signaux max par jour, frais {num(cfg.frais_pct, 2)} % par aller-retour.")
-    print("Gagnants = résultat > 0. Obj. 1 = objectif 1 touché. Espérance = gain moyen par signal en R.")
-    print("PF = gains / pertes. DD max = pire série de pertes cumulées. R = distance entrée-stop.")
-    _tableau("1) Toutes les configurations (sans filtre historique)", brut)
-    wf = walk_forward(f, evts, res, cfg, brut)
-    _tableau("2) Walk-forward : filtre historique calculé chaque jour sur le passé seulement", wf)
-    if wf:
-        debut_wf = min(t["sess"] for t in wf)
-        meme = stats([t for t in brut if t["sess"] >= debut_wf])
-        print(_ligne(f"Comparaison sans filtre, même période", meme))
+def lancer(cfg: Config, debut: str = "2006-01-01", csv: str = "backtest_trades.csv", donnees: dict | None = None,
+           controle: bool = True) -> dict:
+    symboles = list(dict.fromkeys(list(cfg.valeurs) + [cfg.marche, cfg.secteur]))
+    don = donnees or D.historique(symboles, debut="2004-01-01")
+    if donnees is None:
+        maintenant = pd.Timestamp.now(tz=NY)
+        if maintenant.time() < CLOTURE_OK:  # séance en cours : bougie du jour incomplète
+            don = {s: d[d.index < pd.Timestamp(maintenant.date())] for s, d in don.items()}
+    res = resultats_cache(cfg, {}, "backtest") if donnees is None else {}
+    ev = preparer_tout(don, cfg, res)
+    pf, courbe, investi = simuler(ev, cfg, debut=debut)
+    T = pf.journal
 
-    # Sensibilité au seuil
-    print("\n3) Sensibilité au seuil de score (sans filtre historique)")
-    print(f"{'Seuil':<8}{'Signaux':>8}{'Gagnants':>10}{'Espérance':>11}{'Total':>9}")
-    for s in (55, 60, 65, 70, 75, 80):
-        m2 = Moteur(s, cfg.max_trades_jour, cfg.frais_pct)
-        rejouer(a, m2, 0, len(f))
-        st = stats(m2.journal)
-        if st.get("n"):
-            print(f"{s:<8}{st['n']:>8}{num(st['gagnants'], 0) + ' %':>10}{num(st['esperance'], 2) + ' R':>11}{num(st['total'], 1) + ' R':>9}")
-        else:
-            print(f"{s:<8}{0:>8}")
+    print(f"\nBACKTEST du {courbe.index[0]:%d/%m/%Y} au {courbe.index[-1]:%d/%m/%Y} : {', '.join(ev)}")
+    print(f"Risque {num(cfg.risque_pct, 1)} % par position, {cfg.max_positions} positions max, frais {num(cfg.frais_pct, 2)} % par ordre.")
+    print(f"\n{'Portefeuille':<34}{'Par an':>10}{'Pire baisse':>12}{'Sharpe':>8}{'Total':>12}{'Investi':>10}")
+    print("-" * 84)
+    print(_p("Stratégie", performances(courbe), investi.mean() * 100))
+    if cfg.marche in don:
+        q = don[cfg.marche]["close"]
+        print(_p("Nasdaq 100 (QQQ) conservé", performances(q[q.index >= courbe.index[0]])))
+    print(_p("Valeurs suivies, à parts égales", performances(equi_pondere(don, cfg.valeurs, courbe.index[0]))))
 
-    if csv and brut:
-        df = pd.DataFrame(brut)
-        df["configuration"] = df["cle"].map(nom_setup)
-        df["sens"] = df["sens"].map({1: "ACHAT", -1: "VENTE"})
+    print(f"\n{'Signaux':<34}{'Nombre':>6}{'Gagnants':>10}{'Moyenne':>10}{'PF':>7}{'Rdt moy.':>10}{'Séances':>8}")
+    print("-" * 85)
+    for k in SETUPS:
+        print(_l(SETUPS[k], stats([t for t in T if t["setup"] == k])))
+    print(_l("TOTAL", stats(T)))
+    print(_l("  2006 à 2015", stats([t for t in T if t["date_entree"] < "2016"])))
+    print(_l("  2016 à aujourd'hui", stats([t for t in T if t["date_entree"] >= "2016"])))
+    print()
+    for s in ev:
+        print(_l(f"  {s}", stats([t for t in T if t["symbole"] == s])))
+
+    if controle and donnees is None:
+        cfg2 = dataclasses.replace(cfg, valeurs=tuple(CONTROLE))
+        don2 = D.historique(CONTROLE + [cfg.marche, cfg.secteur], debut="2004-01-01")
+        ev2 = preparer_tout(don2, cfg2)
+        pf2, c2, i2 = simuler(ev2, cfg2, debut=debut)
+        print(f"\nCONTRÔLE sur 15 autres valeurs (dont Intel, Cisco, IBM, General Electric, Pfizer)")
+        print(_l("Signaux", stats(pf2.journal)))
+        print(_p("Portefeuille", performances(c2), i2.mean() * 100))
+        print(_p("Ces 15 valeurs, à parts égales", performances(equi_pondere(don2, CONTROLE, c2.index[0]))))
+
+    if csv and T:
+        df = pd.DataFrame(T)
+        df["configuration"] = df["setup"].map(SETUPS)
         df.to_csv(csv, index=False, sep=";", decimal=",", encoding="utf-8-sig")
         print(f"\nDétail des {len(df)} signaux : {csv}")
-    print("\nÀ lire avec prudence : 60 séances, c'est court, et le passé ne garantit rien.")
-    return {"brut": stats(brut), "walk_forward": stats(wf), "trades": brut}
+    print("\nR = distance entrée-stop. Moyenne = gain moyen par signal, frais inclus.")
+    print("Attention : la liste suivie est choisie aujourd'hui, avec des valeurs qui ont beaucoup monté (biais du survivant).")
+    print("Le contrôle sur d'autres valeurs donne une idée plus prudente. Le passé ne garantit rien.")
+    return {"stats": stats(T), "perf": performances(courbe), "trades": T}

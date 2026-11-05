@@ -1,4 +1,4 @@
-"""Petits outils : journal, formatage des nombres à la française, temps de séance."""
+"""Petits outils : journal et formatage des nombres à la française."""
 from __future__ import annotations
 
 import datetime as dt
@@ -6,10 +6,7 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 
-from .config import NY, PARIS
-
-BAR = pd.Timedelta(minutes=5)
-BARS_SEANCE = 78  # 6h30 / 5 min
+from .config import PARIS
 
 
 def log(msg: str) -> None:
@@ -41,24 +38,12 @@ def pct(x, d: int = 1, signe: bool = True) -> str:
     return f"+{s} %" if signe and float(x) > 0 else f"{s} %"
 
 
-def heure_paris(ts: pd.Timestamp) -> str:
-    return ts.tz_convert(PARIS).strftime("%Hh%M")
+def r(x) -> str:
+    if not ok(x):
+        return "n/d"
+    x = 0.0 if abs(x) < 0.05 else float(x)
+    return f"{'+' if x > 0 else ''}{num(x, 1)} R"
 
 
-def seance(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """Date de séance (New York) sans fuseau, pour regrouper les bougies par jour."""
-    if idx.tz is not None:
-        idx = idx.tz_convert(NY)
-    return idx.normalize().tz_localize(None).as_unit("ns")
-
-
-def slot(idx: pd.DatetimeIndex) -> np.ndarray:
-    """Numéro de la bougie 5 min dans la séance : 0 = 9h30 New York, 77 = 15h55."""
-    t = idx.tz_convert(NY)
-    minutes = t.hour * 60 + t.minute - (9 * 60 + 30)
-    return (np.asarray(minutes) // 5).astype(int)
-
-
-def minutes_ny(idx: pd.DatetimeIndex) -> np.ndarray:
-    t = idx.tz_convert(NY)
-    return np.asarray(t.hour * 60 + t.minute)
+def jour(ts) -> str:
+    return pd.Timestamp(ts).strftime("%d/%m")
