@@ -1,0 +1,4 @@
+state.json
+signaux_backtest.csv
+__pycache__/
+.venv/

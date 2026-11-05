@@ -1,0 +1,68 @@
+name: Agent NVDA
+
+on:
+  # Toutes les 5 min, du lundi au vendredi, de 14h à 22h55 heure de Paris (13h-21h UTC).
+  # Le script vérifie lui-même l'ouverture de Wall Street (heure d'été et d'hiver incluses).
+  schedule:
+    - cron: "*/5 13-21 * * 1-5"
+  # Bouton "Run workflow" dans l'onglet Actions
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "test = notification de test, force = analyse même marché fermé, normal = passe classique"
+        type: choice
+        default: test
+        options: [test, force, normal]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvda-agent
+  cancel-in-progress: false
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt
+
+      - name: Récupérer l'état précédent
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: nvda-state-${{ github.run_id }}
+          restore-keys: nvda-state-
+
+      - name: Lancer l'agent
+        env:
+          MODE: ${{ inputs.mode }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          SEUIL_SCORE: ${{ vars.SEUIL_SCORE }}
+          COOLDOWN_MIN: ${{ vars.COOLDOWN_MIN }}
+          SEUIL_MOUVEMENT: ${{ vars.SEUIL_MOUVEMENT }}
+        run: |
+          case "$MODE" in
+            test)  python nvda_agent.py --test ;;
+            force) python nvda_agent.py --force ;;
+            *)     python nvda_agent.py ;;
+          esac
+
+      - name: Sauvegarder l'état
+        if: always() && hashFiles('state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: nvda-state-${{ github.run_id }}
