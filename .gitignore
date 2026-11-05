@@ -1,4 +1,7 @@
 state.json
+*.tmp
+backtest_signaux.csv
 signaux_backtest.csv
 __pycache__/
+.pytest_cache/
 .venv/

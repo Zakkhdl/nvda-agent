@@ -1,18 +1,17 @@
 name: Agent NVDA
 
 on:
-  # Toutes les 5 min, du lundi au vendredi, de 14h à 22h55 heure de Paris (13h-21h UTC).
-  # Le script vérifie lui-même l'ouverture de Wall Street (heure d'été et d'hiver incluses).
+  # Toutes les 5 min du lundi au vendredi, de 14h à 22h55 heure de Paris (13h-21h UTC).
+  # L'agent choisit lui-même quoi faire selon l'heure de New York (heure d'été et d'hiver gérées).
   schedule:
     - cron: "*/5 13-21 * * 1-5"
-  # Bouton "Run workflow" dans l'onglet Actions
   workflow_dispatch:
     inputs:
       mode:
-        description: "test = notification de test, force = analyse même marché fermé, normal = passe classique"
+        description: "test = notification de test, force = analyse immédiate, backtest = mesure sur 60 séances"
         type: choice
         default: test
-        options: [test, force, normal]
+        options: [test, force, backtest, normal]
 
 permissions:
   contents: read
@@ -24,7 +23,7 @@ concurrency:
 jobs:
   analyse:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v5
 
@@ -36,7 +35,7 @@ jobs:
       - name: Installer les dépendances
         run: pip install -r requirements.txt
 
-      - name: Récupérer l'état précédent
+      - name: Récupérer la mémoire de l'agent
         uses: actions/cache/restore@v4
         with:
           path: state.json
@@ -50,17 +49,22 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          CAPITAL_EUR: ${{ vars.CAPITAL_EUR }}
+          RISQUE_PCT: ${{ vars.RISQUE_PCT }}
           SEUIL_SCORE: ${{ vars.SEUIL_SCORE }}
-          COOLDOWN_MIN: ${{ vars.COOLDOWN_MIN }}
+          MAX_SIGNAUX_JOUR: ${{ vars.MAX_SIGNAUX_JOUR }}
+          STOP_MIN_ATR: ${{ vars.STOP_MIN_ATR }}
+          FRAIS_PCT: ${{ vars.FRAIS_PCT }}
           SEUIL_MOUVEMENT: ${{ vars.SEUIL_MOUVEMENT }}
         run: |
           case "$MODE" in
-            test)  python nvda_agent.py --test ;;
-            force) python nvda_agent.py --force ;;
-            *)     python nvda_agent.py ;;
+            test)     python -m nvda_agent --test ;;
+            force)    python -m nvda_agent --force ;;
+            backtest) python -m nvda_agent --backtest ;;
+            *)        python -m nvda_agent ;;
           esac
 
-      - name: Sauvegarder l'état
+      - name: Sauvegarder la mémoire de l'agent
         if: always() && hashFiles('state.json') != ''
         uses: actions/cache/save@v4
         with:

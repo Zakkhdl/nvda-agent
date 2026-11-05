@@ -1,158 +1,114 @@
 # Agent de signaux NVIDIA (NVDA)
 
-Un agent qui analyse le cours de NVIDIA toutes les 5 minutes pendant la séance de Wall Street et t'envoie une alerte sur ton téléphone quand plusieurs signaux techniques s'alignent.
+Agent qui analyse NVIDIA toutes les 5 minutes pendant la séance de Wall Street, comme le ferait un trader : plusieurs unités de temps, contexte de marché, événements, gestion du risque. Il t'envoie ses alertes sur iPhone via l'app ntfy.
 
 Signaux techniques uniquement. Ce n'est pas un conseil en investissement.
 
-## Ce que tu reçois
+## Ta journée type (heure de Paris)
 
-- **Point d'ouverture** chaque jour vers 15h35 (heure de Paris) : écart d'ouverture, clôture de la veille, moyennes mobiles 50 et 200 jours, tendance de fond, volatilité moyenne.
-- **Signal achat** (🟢) ou **signal vente** (🔴) quand le score de confluence atteint le seuil, avec la liste des raisons.
-- **Mouvement brusque** (⚡) quand le cours bouge de plus de 2,5 % en 30 minutes.
-- **Alerte technique** (⚠️) si les données sont indisponibles 3 fois de suite, puis un message quand tout repart.
+| Heure | Message |
+|---|---|
+| 15h05 à 15h30 | 🌅 **Avant l'ouverture** : pré-marché, futures Nasdaq, VIX, niveaux clés, annonces du jour, actus, biais technique |
+| 15h30 à 22h00 | 🟢 / 🔴 **Signal** avec entrée, stop, 2 objectifs, taille de position, raisons pour et contre |
+| Pendant la séance | 🎯 **Objectif 1 atteint** (stop remonté au prix d'entrée), 🏆 objectif 2, ❌ stop, 🔔 sortie de fin de séance |
+| Pendant la séance | ⚡ **Mouvement brusque** (plus de 2,5 % en 30 min) avec la dernière actu |
+| 22h00 à 22h45 | 📊 **Bilan** : séance, signaux du jour et résultats, performance des 20 derniers signaux |
 
-Exemple d'alerte :
+Toucher une alerte ouvre le graphique NVDA sur TradingView.
 
-```
-🟢 NVDA : signal achat (score 5/10)
-Prix : 191,40 $ à 17h35
-Pourquoi :
-• RSI 5 min repasse au-dessus de 30 (sortie de survente)
-• Rebond sur la bande de Bollinger basse
-• Tendance de fond haussière (prix > MM50 > MM200)
-Score opposé : 0/10
-RSI 5 min : 34,5 | VWAP : 193,10 $
-Volatilité moyenne (ATR) : 6,47 $ soit 3,4 %
-Veille : haut 206,79 $, bas 199,68 $
-Signal technique, pas un conseil.
-```
+Deux fois par an, pendant environ 2 semaines (mars et fin octobre), tout est décalé d'une heure plus tôt. L'agent le gère seul.
 
-## Comment le score fonctionne
+## Ce que l'agent analyse
 
-L'agent travaille sur des bougies de 5 minutes. Il ne regarde que les bougies clôturées. Chaque condition ajoute des points côté achat ou côté vente.
+**5 configurations de trading**, chacune en achat et en vente :
 
-| Condition | Achat | Vente |
-|---|---|---|
-| RSI 5 min sort de survente (repasse 30) ou de surachat (repasse 70) | +2 | +2 |
-| RSI 5 min encore en survente ou en surachat | +1 | +1 |
-| MACD croise sa ligne de signal | +2 | +2 |
-| Rebond sur la bande de Bollinger basse ou rejet sur la haute | +2 | +2 |
-| Prix encore hors de la bande de Bollinger | +1 | +1 |
-| Prix croise le VWAP de la séance | +1 | +1 |
-| Bougie dans le bon sens avec volume 1,5 fois supérieur à la moyenne | +1 | +1 |
-| Tendance de fond journalière dans le bon sens (MM50 et MM200) | +1 | +1 |
-| RSI journalier extrême (sous 35 ou au-dessus de 70) | +1 | +1 |
-| Signal contre la tendance de fond | -1 | -1 |
+- **Rebond dans la tendance** : repli sur la moyenne 21 ou le VWAP dans une tendance, puis reprise.
+- **Cassure du range d'ouverture** : première clôture au-delà du plus haut ou du plus bas des 30 premières minutes.
+- **Cassure du niveau de la veille** : première clôture au-delà du plus haut ou du plus bas de la veille.
+- **Faux départ repris** : le niveau de la veille est enfoncé puis repris avec force (piège à vendeurs ou à acheteurs).
+- **Retour vers la moyenne** : excès sous ou au-dessus des bandes VWAP, RSI extrême, puis retournement.
 
-Une alerte part si les 3 règles sont réunies :
+**Une note sur 100**, qui part de 50 et s'ajuste avec 18 facteurs :
 
-- le score atteint le seuil (5 sur 10 par défaut),
-- au moins un vrai déclencheur (+2) apparaît sur la bougie,
-- le score du côté opposé est plus faible.
+- Tendance de fond (moyennes 50 et 200 jours) et tendance 15 minutes
+- Force de la tendance (ADX), adaptée au type de configuration
+- Nasdaq 100 (QQQ) et semi-conducteurs (SMH) dans le même sens ou non
+- Force relative de NVIDIA face à son secteur
+- Volume comparé à la normale **de la même heure** (le volume intraday suit une courbe en U)
+- Divergences RSI, momentum MACD, extension par rapport au VWAP
+- Place disponible jusqu'au prochain obstacle (niveaux de la veille, de la séance, 20 jours, moyennes mobiles)
+- Taille du stop, heure de la journée, VIX
+- Résultats NVIDIA (la veille, le jour J, le lendemain) et annonces macro (Fed, inflation, emploi)
+- Historique récent de la configuration sur les 60 dernières séances, recalculé chaque matin
 
-Pas plus d'une alerte du même type par heure. La tendance de fond utilise les chiffres de la veille, jamais de données futures.
+Un signal part si la note atteint 65 (note B) ou 80 (note A). Si achat et vente sont trop proches, l'agent s'abstient.
 
-## Installation sur GitHub (gratuit, ton PC peut rester éteint)
+## Gestion du risque intégrée
 
-Compte 15 minutes.
+- **Stop** placé sous la structure (plus bas récent, milieu du range) et jamais à moins de 2,5 fois la volatilité 5 minutes.
+- **Objectif 1** à 1 R (R = distance entrée-stop). Plan : sortir la moitié, remonter le stop au prix d'entrée.
+- **Objectif 2** à 2 R, ou juste avant le prochain obstacle s'il est entre 1,2 et 2,5 R.
+- **Une seule position suivie à la fois**, 4 signaux maximum par séance, aucune position gardée le soir.
+- **Taille de position** calculée si tu renseignes ton capital (voir Réglages).
 
-### 1. Choisis comment recevoir les alertes
+## Ce que disent les tests (à lire avant de trader)
 
-**Option ntfy (la plus simple, aucun compte)**
+Mesuré le 5 novembre 2026 sur les 60 dernières séances, frais de 0,03 % inclus :
 
-- Installe l'application **ntfy** sur ton téléphone (Android ou iPhone).
-- Appuie sur **+** et abonne-toi à un nom de canal difficile à deviner, par exemple `nvda-z-7k2p9x4m`.
-- Garde ce nom. C'est ton secret `NTFY_TOPIC`. Toute personne qui connaît ce nom peut lire tes alertes.
+- **NVIDIA** : 33 signaux, 45 % gagnants, espérance -0,02 R par signal. Soit l'équilibre.
+- **Validation sur 4 autres valeurs** du secteur (AMD, Broadcom, TSMC, Micron) pour éviter de sur-optimiser NVIDIA : résultats entre -0,08 R et +0,23 R par signal.
+- La note ne prédit pas mieux le résultat quand elle monte. Les seuls facteurs qui aident nettement sur les 5 valeurs : un volume au moins 2 fois supérieur à la normale et une tendance très forte (ADX au-dessus de 35).
 
-**Option Telegram**
+Conclusion directe : aucun ensemble de règles techniques ne bat le marché de façon fiable en intraday. L'agent te fait gagner du temps, structure tes décisions et protège ton capital. Il ne remplace pas ton jugement.
 
-- Dans Telegram, écris à **@BotFather**, tape `/newbot` et suis les étapes. Il te donne un token. C'est ton secret `TELEGRAM_BOT_TOKEN`.
-- Envoie un message quelconque à ton nouveau bot.
-- Ouvre `https://api.telegram.org/bot<TON_TOKEN>/getUpdates` dans ton navigateur. Repère `"chat":{"id":123456789`. Ce nombre est ton secret `TELEGRAM_CHAT_ID`.
+Recommandations :
 
-Tu peux activer les deux.
+- Suis les signaux **sans argent réel pendant 3 à 4 semaines**. Le bilan du soir tient les comptes.
+- Ensuite, risque au maximum **0,5 à 1 % de ton capital** par signal.
+- Relance le backtest une fois par mois (voir plus bas).
 
-### 2. Crée une clé Twelve Data (recommandé)
+## Installation
 
-- Crée un compte gratuit sur twelvedata.com et copie ta clé API.
-- Le plan gratuit donne 800 crédits par jour. L'agent en utilise environ 160 par séance.
-- Sans clé, l'agent utilise Yahoo Finance. Ça marche aussi, mais Yahoo bloque parfois les serveurs de GitHub. Avec une clé, Yahoo sert de secours automatique.
+1. App **ntfy** sur ton iPhone, abonnée à ton canal secret.
+2. Dans le dépôt GitHub : **Settings > Secrets and variables > Actions**.
+   - Onglet **Secrets** : `NTFY_TOPIC` = ton nom de canal. Optionnel : `TWELVEDATA_API_KEY` (clé gratuite sur twelvedata.com, plus fiable que Yahoo depuis GitHub).
+   - Onglet **Variables** : les réglages ci-dessous, si tu veux changer les valeurs par défaut.
+3. Onglet **Actions > Agent NVDA > Run workflow** : mode `test` pour recevoir une notification, mode `force` pour une analyse immédiate, mode `backtest` pour la mesure sur 60 séances (résultat dans le journal de l'exécution).
 
-### 3. Crée le dépôt GitHub
-
-- Sur github.com, clique sur **New repository**. Nom : `nvda-agent`. Choisis **Public**.
-  - Public = minutes GitHub Actions illimitées et gratuites. Ton code est visible, tes secrets ne le sont jamais.
-  - En privé, le quota gratuit (2 000 minutes par mois) ne suffit pas pour une passe toutes les 5 minutes.
-- Clique sur **Add file > Upload files** et dépose `nvda_agent.py`, `requirements.txt` et `README.md`.
-- Clique sur **Add file > Create new file**. Tape comme nom `.github/workflows/nvda-agent.yml`, colle le contenu du fichier `nvda-agent.yml`, puis valide.
-
-### 4. Ajoute tes secrets
-
-Dans le dépôt : **Settings > Secrets and variables > Actions > New repository secret**. Crée ceux dont tu as besoin :
-
-- `NTFY_TOPIC`
-- `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID`
-- `TWELVEDATA_API_KEY`
-
-### 5. Teste
-
-- Onglet **Actions**. Si GitHub le demande, active les workflows.
-- Clique sur **Agent NVDA > Run workflow**, laisse le mode `test`, lance.
-- Tu dois recevoir « Test agent NVDA » sur ton téléphone en moins d'une minute.
-- Relance avec le mode `force` pour voir une vraie analyse, même marché fermé (le point d'ouverture n'arrive que pendant une séance).
-
-C'est fini. L'agent tourne seul du lundi au vendredi pendant la séance US.
-
-### Bon à savoir
-
-- Séance US : 15h30 à 22h00 heure de Paris. Deux fois par an, pendant environ 2 semaines (mars et fin octobre), c'est 14h30 à 21h00. L'agent gère ces décalages tout seul.
-- Aux heures chargées, GitHub peut lancer une passe avec quelques minutes de retard. L'agent rattrape les bougies manquées (jusqu'à 30 minutes).
-- Si le dépôt n'a aucune activité pendant 60 jours, GitHub met les tâches planifiées en pause et t'envoie un mail. Un clic sur **Enable workflow** relance tout.
-- Les jours fériés américains, aucune nouvelle bougie n'arrive, donc aucune alerte.
-
-## Réglages
-
-Dans **Settings > Secrets and variables > Actions > Variables**, tu peux créer :
+## Réglages (variables GitHub)
 
 | Variable | Défaut | Effet |
 |---|---|---|
-| `SEUIL_SCORE` | 5 | Score minimum pour alerter. Plus haut = moins d'alertes, plus sélectives. |
-| `COOLDOWN_MIN` | 60 | Minutes minimum entre 2 alertes du même type. |
-| `SEUIL_MOUVEMENT` | 2.5 | Variation en % sur 30 minutes pour l'alerte de mouvement brusque. |
+| `CAPITAL_EUR` | vide | Ton capital en euros. Active le calcul de taille de position. |
+| `RISQUE_PCT` | 1 | % du capital risqué par signal. |
+| `SEUIL_SCORE` | 65 | Note minimum pour alerter. Plus haut = moins de signaux. |
+| `MAX_SIGNAUX_JOUR` | 4 | Nombre maximum de signaux par séance. |
+| `STOP_MIN_ATR` | 2,5 | Distance minimum du stop, en volatilité 5 min. |
+| `FRAIS_PCT` | 0,03 | Tes frais aller-retour en %. Mets la vraie valeur de ton courtier (frais de change compris). |
+| `SEUIL_MOUVEMENT` | 2,5 | % sur 30 min pour l'alerte de mouvement brusque. |
 
-Pour suivre une autre action, ajoute la variable `SYMBOL` (par exemple `AMD`) dans le bloc `env` du workflow.
+Utilise un point pour les décimales dans GitHub (par exemple `0.5`).
 
-## Utilisation sur ton PC (alternative)
+## Calendrier des annonces
 
-Ton PC doit rester allumé pendant la séance US.
+Le fichier `evenements.json` contient les décisions de la Fed, l'inflation (CPI) et l'emploi jusqu'à fin 2027, d'après les calendriers officiels (federalreserve.gov et bls.gov). Les dates de la Fed pour 2027 sont provisoires. Les dates de résultats NVIDIA sont aussi récupérées automatiquement chaque jour.
+
+## Sur ton ordinateur (optionnel)
 
 ```bash
 pip install -r requirements.txt
-
-# Mac / Linux
-export NTFY_TOPIC=nvda-z-7k2p9x4m
-# Windows (invite de commandes)
-set NTFY_TOPIC=nvda-z-7k2p9x4m
-
-python nvda_agent.py --test       # notification de test
-python nvda_agent.py --loop       # tourne toutes les 5 minutes
-python nvda_agent.py --force      # une analyse tout de suite, même marché fermé
+export NTFY_TOPIC=ton-canal
+python -m nvda_agent --test       # notification de test
+python -m nvda_agent --backtest   # mesure sur 60 séances
+python -m nvda_agent --force --dry-run   # analyse immédiate, sans envoyer
+python -m pytest -q               # 16 tests automatiques
 ```
 
-## Mesurer si les signaux marchent : le backtest
+## Fiabilité
 
-```bash
-python nvda_agent.py --backtest
-```
-
-L'agent rejoue les 60 dernières séances avec les seuils 4, 5, 6 et 7. Pour chaque signal, il mesure si le cours est allé dans le bon sens 1 heure puis 1 séance plus tard. Il compare au hasard. Le détail des signaux part dans `signaux_backtest.csv`.
-
-Lance-le une fois par mois. Si un seuil ne bat pas la référence « au hasard », ne te fie pas à ses alertes.
-
-## Limites, à lire avant d'agir
-
-- Aucun indicateur ne trouve le « meilleur moment » à coup sûr. L'agent repère des configurations qui ont un sens technique. Il ne connaît pas l'avenir.
-- Les signaux techniques perdent leur valeur autour des résultats trimestriels de NVIDIA et des grandes annonces macro (Fed, inflation, restrictions d'export de puces). Vérifie l'actu avant chaque décision.
-- Un signal d'achat dans une forte baisse peut arriver alors que la chute continue. Regarde la tendance de fond indiquée dans l'alerte.
-- Le backtest ne compte ni les frais ni l'écart achat/vente. 60 séances, c'est court.
-- Décide à l'avance combien tu peux perdre sur une position, et tiens-toi à ce montant.
+- Aucune donnée du futur dans les calculs : vérifié par un test automatique qui recalcule tout bougie par bougie.
+- Le backtest utilise exactement le même moteur que le suivi en direct.
+- Si les données manquent 3 fois de suite, tu reçois une alerte, puis une autre quand tout repart.
+- Si une cotation est figée plus de 20 minutes, tu es prévenu.
+- GitHub peut décaler une exécution de quelques minutes aux heures chargées. L'agent rattrape les bougies manquées et signale les alertes en retard.
+- Sans activité sur le dépôt pendant 60 jours, GitHub met l'automatisation en pause et t'envoie un mail. Un clic sur **Enable workflow** relance tout.
