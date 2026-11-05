@@ -1,8 +1,10 @@
 """Tests hors réseau. Lancer : python -m pytest -q"""
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -11,235 +13,224 @@ import pytest
 from nvda_agent import agent as AG
 from nvda_agent import data as D
 from nvda_agent.config import NY, Config
-from nvda_agent.data import Marche
-from nvda_agent.engine import Moteur, rejouer, stats
-from nvda_agent.features import construire
-from nvda_agent.strategy import analyser
+from nvda_agent.features import preparer
+from nvda_agent.portfolio import Portefeuille, stats
+from nvda_agent.simulation import preparer_tout, simuler
+from nvda_agent.strategy import evaluer, seances_avant_resultats
+
+VALEURS = ("AAA", "BBB", "NVDA")
 
 
 # ---------------------------------------------------------------------------
-# Données simulées
+# Données simulées : tendances haussières entrecoupées de replis
 # ---------------------------------------------------------------------------
-def _seances(n_jours: int, fin: str = "2026-11-05", graine: int = 1, depart: float = 180.0):
+def _serie(n: int, graine: int, depart: float = 100.0, fin: str = "2026-11-04") -> pd.DataFrame:
     rng = np.random.default_rng(graine)
-    jours = pd.bdate_range(end=fin, periods=n_jours)
-    lignes, daily, prix = [], [], depart
-    for k, j in enumerate(jours):
-        derive = 0.0015 if (k // 15) % 2 == 0 else -0.0012
-        o = prix * (1 + rng.normal(0, 0.008))
-        p, barres = o, []
-        for s in range(78):
-            ts = pd.Timestamp(j, tz=NY) + pd.Timedelta(hours=9, minutes=30 + 5 * s)
-            c = p * (1 + rng.normal(derive / 78, 0.0025))
-            h = max(p, c) * (1 + abs(rng.normal(0, 0.0008)))
-            lo = min(p, c) * (1 - abs(rng.normal(0, 0.0008)))
-            v = rng.lognormal(12, 0.4) * (2.5 if s < 4 or s > 73 else 1.0)
-            barres.append((ts, p, h, lo, c, v))
-            p = c
-        lignes += barres
-        daily.append((pd.Timestamp(j, tz=NY), o, max(b[2] for b in barres), min(b[3] for b in barres), p,
-                      sum(b[5] for b in barres)))
-        prix = p
-    mk = lambda r: pd.DataFrame(r, columns=["ts", "open", "high", "low", "close", "volume"]).set_index("ts")
-    return mk(lignes), mk(daily)
-
-
-def _marche(n_intraday: int = 40, graine: int = 1) -> Marche:
-    intra, daily_recent = _seances(n_intraday, graine=graine)
-    _, daily_ancien = _seances(260, fin=(daily_recent.index[0] - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                               graine=graine + 10)
-    daily = pd.concat([daily_ancien, daily_recent])
-    ref_m, _ = _seances(n_intraday, graine=graine + 1, depart=600)
-    ref_s, _ = _seances(n_intraday, graine=graine + 2, depart=450)
-    vix = intra[["close"]].copy()
-    vix["close"] = 20 + np.cumsum(np.random.default_rng(graine).normal(0, 0.05, len(vix)))
-    for c in ("open", "high", "low"):
-        vix[c] = vix["close"]
-    vix["volume"] = 0.0
-    norm = D.normaliser
-    return Marche(nvda=norm(intra), daily=norm(daily), ref_marche=norm(ref_m), ref_secteur=norm(ref_s),
-                  vix=norm(vix), source="SIMULATION")
+    jours = pd.bdate_range(end=fin, periods=n)
+    derive = np.where((np.arange(n) // 60) % 3 == 2, -0.0015, 0.0012)
+    ret = derive + rng.normal(0, 0.018, n)
+    close = depart * np.exp(np.cumsum(ret))
+    ouverture = close * np.exp(rng.normal(0, 0.006, n))
+    haut = np.maximum(close, ouverture) * (1 + np.abs(rng.normal(0, 0.008, n)))
+    bas = np.minimum(close, ouverture) * (1 - np.abs(rng.normal(0, 0.008, n)))
+    vol = rng.lognormal(15, 0.35, n)
+    df = pd.DataFrame({"open": ouverture, "high": haut, "low": bas, "close": close, "volume": vol}, index=jours)
+    df.index.name = "date"
+    return df
 
 
 @pytest.fixture(scope="module")
-def marche():
-    return _marche()
+def donnees():
+    d = {s: _serie(900, k + 1) for k, s in enumerate(VALEURS)}
+    d["QQQ"] = _serie(900, 50, 300)
+    d["SMH"] = _serie(900, 51, 200)
+    return d
+
+
+@pytest.fixture(scope="module")
+def cfg():
+    return Config(valeurs=VALEURS, frais_pct=0.0)
 
 
 # ---------------------------------------------------------------------------
 # 1. Aucune information du futur
 # ---------------------------------------------------------------------------
-def test_aucune_fuite_du_futur(marche):
-    complet = construire(marche)
-    for coupe in (len(marche.nvda) - 1, len(marche.nvda) - 37, len(marche.nvda) - 80):
-        m2 = Marche(**{**marche.__dict__})
-        m2.nvda = marche.nvda.iloc[:coupe]
-        m2.ref_marche = marche.ref_marche.iloc[:coupe]
-        m2.ref_secteur = marche.ref_secteur.iloc[:coupe]
-        partiel = construire(m2)
+def test_aucune_fuite_du_futur(donnees, cfg):
+    s = "AAA"
+    complet = evaluer(preparer(donnees[s], donnees["QQQ"], donnees["SMH"]), cfg, s, ["2026-06-01"])
+    for coupe in (len(donnees[s]) - 1, len(donnees[s]) - 40, 500):
+        tronque = {k: v.iloc[:coupe] for k, v in donnees.items()}
+        partiel = evaluer(preparer(tronque[s], tronque["QQQ"], tronque["SMH"]), cfg, s, ["2026-06-01"])
         a = complet.iloc[:coupe]
         for col in partiel.columns:
             if partiel[col].dtype.kind in "fiub":
-                x, y = a[col].to_numpy(dtype=float), partiel[col].to_numpy(dtype=float)
-                assert np.allclose(x, y, equal_nan=True, rtol=1e-9, atol=1e-9), f"fuite du futur : {col}"
+                assert np.allclose(a[col].to_numpy(float), partiel[col].to_numpy(float), equal_nan=True), col
+        assert (a["setup"].to_numpy() == partiel["setup"].to_numpy()).all()
 
 
-def test_signaux_identiques_en_direct_et_en_backtest(marche):
-    """Un signal donné à la bougie t ne doit pas changer quand les bougies suivantes arrivent."""
-    complet = analyser(construire(marche))
-    coupe = len(marche.nvda) - 50
-    m2 = Marche(**{**marche.__dict__})
-    m2.nvda = marche.nvda.iloc[:coupe]
-    partiel = analyser(construire(m2))
-    a, b = complet.meilleur["score"][:coupe], partiel.meilleur["score"]
-    assert np.array_equal(np.nan_to_num(a, nan=-9), np.nan_to_num(b, nan=-9))
+def test_des_signaux_existent(donnees, cfg):
+    ev = preparer_tout(donnees, cfg)
+    nb = sum((d["setup"] != "").sum() for d in ev.values())
+    assert nb > 5
+    for d in ev.values():
+        sig = d[d["setup"] != ""]
+        assert (sig["stop"] < sig["close"]).all()
+        dist = (sig["close"] - sig["stop"]) / sig["atr"]
+        assert dist.between(cfg.stop_min_atr - 1e-9, cfg.stop_max_atr + 1e-9).all()
 
 
-# ---------------------------------------------------------------------------
-# 2. Indicateurs
-# ---------------------------------------------------------------------------
-def test_contexte_journalier_vient_de_la_veille(marche):
-    f = construire(marche)
-    derniere_seance = f["sess"].iloc[-1]
-    veille = marche.daily[marche.daily.index.normalize().tz_localize(None) < derniere_seance].iloc[-1]
-    assert f["veille_close"].iloc[-1] == pytest.approx(veille["close"])
-    assert f["veille_haut"].iloc[-1] == pytest.approx(veille["high"])
-
-
-def test_range_ouverture_disponible_a_10h(marche):
-    f = construire(marche)
-    jour = f[f["sess"] == f["sess"].iloc[-1]]
-    assert jour["or_haut"].iloc[:6].isna().all()
-    assert jour["or_haut"].iloc[6] == pytest.approx(jour["high"].iloc[:6].max())
-
-
-def test_valeurs_plausibles(marche):
-    f = construire(marche).iloc[-500:]
-    assert f["rsi"].between(0, 100).all()
-    assert (f["atr5"] > 0).all()
-    assert f["adx15"].between(0, 100).all()
-    assert f["rvol"].gt(0).all()
+def test_seances_avant_resultats():
+    idx = pd.DatetimeIndex(["2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18"])
+    nb = seances_avant_resultats(idx, ["2026-11-17", "2027-02-20"])
+    assert list(nb[:3]) == [2, 1, 69] or list(nb[:2]) == [2, 1]
+    assert nb[2] > 10  # le jour même, la prochaine publication est la suivante
 
 
 # ---------------------------------------------------------------------------
-# 3. Moteur de suivi
+# 2. Portefeuille modèle
 # ---------------------------------------------------------------------------
-def _moteur():
-    return Moteur(seuil=60, max_jour=4, frais_pct=0.0)
+def _b(o, h, l, c, atr=2.0, res=np.inf):
+    return {"open": o, "high": h, "low": l, "close": c, "atr": atr, "seances_resultats": res}
 
 
-CAND_L = {"cle": "PULLBACK_L", "sens": 1, "score": 70.0, "stop": 99.0, "t1": 101.0, "t2": 102.0}
+def _sig(s="AAA", close=100.0, stop=95.0, score=70.0):
+    return {"symbole": s, "setup": "REPLI", "score": score, "stop": stop, "close": close, "atr": 2.0}
 
 
-def test_objectif_1_puis_objectif_2():
-    m = _moteur()
-    ev = m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    assert ev[0]["type"] == "OUVERTURE"
-    ev = m.pas(1, "t1", "J", 11, 100, 101.2, 100.5, 101, False, None)
-    assert ev[0]["type"] == "T1" and m.pos.stop == 100
-    ev = m.pas(2, "t2", "J", 12, 101, 102.5, 100.8, 102.2, False, None)
-    assert ev[0]["type"] == "T2"
-    assert ev[0]["trade"]["R"] == pytest.approx(0.5 * 1 + 0.5 * 2)
+def _pf(**k):
+    return Portefeuille(dataclasses.replace(Config(valeurs=("AAA", "BBB")), frais_pct=0.0, **k), 100_000)
 
 
-def test_stop_puis_pire_cas():
-    m = _moteur()
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    ev = m.pas(1, "t1", "J", 11, 100, 101.5, 98.5, 100, False, None)  # stop ET objectif dans la même bougie
-    assert ev[0]["type"] == "STOP" and ev[0]["trade"]["R"] == pytest.approx(-1)
+def test_achat_le_lendemain_a_l_ouverture_et_taille():
+    pf = _pf()
+    ev = pf.jour("2026-01-02", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    assert ev[0]["type"] == "SIGNAL" and not pf.positions
+    ev = pf.jour("2026-01-05", {"AAA": _b(100, 101, 99, 100.5)}, [])
+    assert ev[0]["type"] == "ACHAT"
+    p = pf.positions["AAA"]
+    assert p.entree == 100 and p.risque == 5
+    assert p.quantite * p.risque == pytest.approx(1000)  # 1 % de 100 000
+    assert p.t1 == pytest.approx(110)
 
 
-def test_ouverture_sous_le_stop():
-    m = _moteur()
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    ev = m.pas(1, "t1", "J", 11, 98.0, 98.5, 97.5, 98, False, None)
-    assert ev[0]["trade"]["sortie"] == 98.0 and ev[0]["trade"]["R"] == pytest.approx(-2)
+def test_annulation_si_ouverture_trop_haute():
+    pf = _pf()
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    ev = pf.jour("d2", {"AAA": _b(103, 104, 102, 103)}, [])  # max = 100 + 1 x 2
+    assert ev[0]["type"] == "ANNULE" and not pf.positions
 
 
-def test_retour_au_prix_entree_apres_objectif_1():
-    m = _moteur()
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    m.pas(1, "t1", "J", 11, 100, 101.1, 100.2, 101, False, None)
-    ev = m.pas(2, "t2", "J", 12, 100.5, 100.6, 99.9, 100, False, None)
-    assert ev[0]["type"] == "BE" and ev[0]["trade"]["R"] == pytest.approx(0.5)
+def test_stop_et_objectif_le_meme_jour_on_suppose_le_pire():
+    pf = _pf()
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    pf.jour("d2", {"AAA": _b(100, 101, 99, 100)}, [])
+    ev = pf.jour("d3", {"AAA": _b(100, 112, 94, 100)}, [])
+    assert ev[0]["type"] == "SORTIE" and ev[0]["trade"]["R"] == pytest.approx(-1)
 
 
-def test_vente_symetrique():
-    m = _moteur()
-    cand = {"cle": "ORB_S", "sens": -1, "score": 70.0, "stop": 101.0, "t1": 99.0, "t2": 98.0}
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, cand)
-    m.pas(1, "t1", "J", 11, 100, 100.2, 98.9, 99, False, None)
-    ev = m.pas(2, "t2", "J", 12, 99, 99.1, 97.9, 98, False, None)
-    assert ev[0]["type"] == "T2" and ev[0]["trade"]["R"] == pytest.approx(1.5)
+def test_objectif_1_puis_stop_au_prix_entree():
+    pf = _pf()
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    pf.jour("d2", {"AAA": _b(100, 101, 99, 100)}, [])
+    ev = pf.jour("d3", {"AAA": _b(105, 111, 104, 108)}, [])
+    assert [e["type"] for e in ev][0] == "T1"
+    assert pf.positions["AAA"].stop >= 100
+    ev = pf.jour("d4", {"AAA": _b(104, 104, 99, 100)}, [])
+    tr = ev[0]["trade"]
+    assert tr["motif"] in ("BE", "SUIVEUR") and tr["R"] == pytest.approx(1.0, abs=0.35)
 
 
-def test_cloture_fin_de_seance_et_limite_quotidienne():
-    m = Moteur(seuil=60, max_jour=1, frais_pct=0.0)
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    ev = m.pas(1, "t1", "J", 77, 100, 100.4, 99.8, 100.3, True, None)
-    assert ev[0]["type"] == "FIN" and ev[0]["trade"]["R"] == pytest.approx(0.3)
-    assert m.pas(2, "t2", "J", 20, 100, 100, 100, 100, False, CAND_L) == []  # limite atteinte
+def test_stop_suiveur_ne_redescend_jamais():
+    pf = _pf()
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    pf.jour("d2", {"AAA": _b(100, 101, 99, 100)}, [])
+    stops = []
+    for k, c in enumerate([103, 106, 109, 108, 107, 112]):
+        pf.jour(f"d{k + 3}", {"AAA": _b(c - 1, c + 0.5, c - 1.5, c)}, [])
+        if "AAA" in pf.positions:
+            stops.append(pf.positions["AAA"].stop)
+    assert all(b >= a for a, b in zip(stops, stops[1:]))
 
 
-def test_frais_deduits():
-    m = Moteur(seuil=60, max_jour=4, frais_pct=0.1)
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    ev = m.pas(1, "t1", "J", 11, 100, 100.1, 98.9, 99, False, None)
-    assert ev[0]["trade"]["R"] == pytest.approx(-1 - 0.1)
+def test_sortie_apres_duree_maximale():
+    pf = _pf(duree_max=3)
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    types = []
+    for k in range(5):
+        types += [e["type"] for e in pf.jour(f"d{k + 2}", {"AAA": _b(100.5, 101, 100, 100.5)}, [])]
+    assert "SORTIE_PREVUE" in types and pf.journal and pf.journal[0]["motif"] == "DUREE"
 
 
-def test_persistance_du_moteur():
-    m = _moteur()
-    m.pas(0, "t0", "J", 10, 100, 100, 100, 100, False, CAND_L)
-    m2 = _moteur()
-    m2.restaurer(json.loads(json.dumps(m.etat())))
-    assert m2.pos.entree == 100 and m2.nb_jour == 1
+def test_limites_positions_et_achats_par_jour():
+    pf = _pf(max_positions=2, max_entrees_jour=1)
+    ev = pf.jour("d1", {"AAA": _b(99, 101, 98, 100), "BBB": _b(99, 101, 98, 100)},
+                 [_sig("AAA", score=70), _sig("BBB", score=80)])
+    assert [e["symbole"] for e in ev if e["type"] == "SIGNAL"] == ["BBB"]
+
+
+def test_persistance():
+    pf = _pf()
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    pf.jour("d2", {"AAA": _b(100, 101, 99, 100)}, [])
+    pf2 = _pf()
+    pf2.restaurer(json.loads(json.dumps(pf.etat())))
+    assert pf2.positions["AAA"].entree == 100 and pf2.cash == pytest.approx(pf.cash)
+
+
+def test_frais():
+    pf = Portefeuille(Config(valeurs=("AAA",), frais_pct=0.1), 100_000)
+    pf.jour("d1", {"AAA": _b(99, 101, 98, 100)}, [_sig()])
+    pf.jour("d2", {"AAA": _b(100, 101, 99, 100)}, [])
+    ev = pf.jour("d3", {"AAA": _b(96, 96, 94, 95)}, [])
+    assert ev[0]["trade"]["R"] < -1
 
 
 # ---------------------------------------------------------------------------
-# 4. Agent complet sur une séance simulée
+# 3. Simulation et passage du soir
 # ---------------------------------------------------------------------------
-def test_phases():
-    t = lambda h, mi, j=5: pd.Timestamp(dt.datetime(2026, 11, j, h, mi), tz=NY)
-    assert AG.phase(t(9, 10)) == "pre"
-    assert AG.phase(t(9, 30)) == "seance"
-    assert AG.phase(t(15, 59)) == "seance"
-    assert AG.phase(t(16, 10)) == "post"
-    assert AG.phase(t(17, 0)) == "ferme"
-    assert AG.phase(t(11, 0, j=7)) == "ferme"  # samedi
+def test_simulation(donnees, cfg):
+    ev = preparer_tout(donnees, cfg)
+    pf, courbe, investi = simuler(ev, cfg)
+    assert len(courbe) > 500 and (courbe > 0).all() and investi.between(0, 1.0001).all()
+    assert stats(pf.journal)["n"] > 0
 
 
-def test_seance_complete(tmp_path, monkeypatch, marche):
-    monkeypatch.setattr(D, "dates_resultats", lambda s: [])
-    monkeypatch.setattr(D, "actualites", lambda s, n=3: [{"titre": "Titre test", "source": "Test", "date": ""}])
-    monkeypatch.setattr(D, "dernier_cours", lambda s: 1.10)
+def test_soirees_successives(tmp_path, monkeypatch, donnees):
+    monkeypatch.setattr(D, "dates_resultats", lambda s: ["2026-11-17"] if s == "NVDA" else [])
+    monkeypatch.setattr(D, "eurusd", lambda: 1.10)
     envoyes = []
     monkeypatch.setattr(AG, "envoyer", lambda cfg, t, c, *a, **k: envoyes.append((t, c)) or True)
     ev_file = tmp_path / "ev.json"
-    ev_file.write_text(json.dumps({"evenements": []}))
-    cfg = Config(state_file=str(tmp_path / "state.json"), events_file=str(ev_file), seuil=55, capital_eur=10000)
-    jour = marche.nvda.index[-1].normalize()
-    debut = jour + pd.Timedelta(hours=9, minutes=35, seconds=20)
-    for k in range(0, 82):
-        now = debut + pd.Timedelta(minutes=5 * k)
-        m2 = Marche(**{**marche.__dict__})
-        AG.executer(cfg, now=now.to_pydatetime(), dry_run=True, marche=m2)
-    etat = json.loads((tmp_path / "state.json").read_text())
-    assert etat["erreurs"] == 0
-    assert etat["recap_date"] == jour.date().isoformat()
-    assert etat["calib"]["date"] == jour.date().isoformat()
-    titres = [t for t, _ in envoyes]
-    assert any("bilan" in t for t in titres)
-    import re
+    ev_file.write_text(json.dumps({"evenements": [{"date": "2026-11-10", "type": "CPI", "titre": "Inflation US"}]}))
+    cfg = Config(valeurs=VALEURS, state_file=str(tmp_path / "s.json"), events_file=str(ev_file), capital_eur=20000)
+    jours = donnees["AAA"].index[-60:]
+    for j in jours:
+        tronque = {k: v[v.index <= j] for k, v in donnees.items()}
+        now = dt.datetime(j.year, j.month, j.day, 16, 40, tzinfo=NY)
+        AG.executer(cfg, now=now, donnees=tronque)
+    etat = json.loads((tmp_path / "s.json").read_text())
+    assert etat["erreurs"] == 0 and etat["derniere_date"] == str(jours[-1].date())
+    assert any(t.startswith("Bilan de la semaine") for t, _ in envoyes)
     for t, c in envoyes:
-        assert not re.search(r"\bnan\b|\binf\b", (t + c).lower()), f"valeur manquante dans : {t}"
-    assert etat["moteur"]["pos"] is None  # aucune position laissée ouverte le soir
+        assert not re.search(r"\bnan\b|\binf\b|n/d", (t + c).lower()), t
+    # relancer la même soirée n'envoie rien de plus
+    n = len(envoyes)
+    AG.executer(cfg, now=now, donnees=tronque)
+    assert len(envoyes) == n
 
 
-def test_backtest_tourne(marche, tmp_path, monkeypatch):
-    from nvda_agent import backtest as B
-    ev_file = tmp_path / "ev.json"
-    ev_file.write_text(json.dumps({"evenements": [{"date": "2026-11-03", "type": "RESULTATS"}]}))
-    cfg = Config(events_file=str(ev_file), seuil=55)
-    r = B.lancer(cfg, csv=str(tmp_path / "bt.csv"), marche=marche)
-    assert "brut" in r
+def test_seance_en_cours_ignoree(tmp_path, monkeypatch, donnees):
+    monkeypatch.setattr(D, "dates_resultats", lambda s: [])
+    monkeypatch.setattr(AG, "envoyer", lambda *a, **k: True)
+    cfg = Config(valeurs=VALEURS, state_file=str(tmp_path / "s.json"), events_file=str(tmp_path / "x.json"))
+    j = donnees["AAA"].index[-1]
+    AG.executer(cfg, now=dt.datetime(j.year, j.month, j.day, 11, 0, tzinfo=NY), donnees=donnees)
+    etat = json.loads((tmp_path / "s.json").read_text())
+    assert etat["derniere_date"] == str(donnees["AAA"].index[-2].date())
+
+
+def test_backtest(donnees, cfg, capsys):
+    from nvda_agent.backtest import lancer
+    r = lancer(dataclasses.replace(cfg, valeurs=VALEURS), csv="", donnees=donnees, controle=False)
+    assert r["stats"]["n"] > 0
+    assert "BACKTEST" in capsys.readouterr().out

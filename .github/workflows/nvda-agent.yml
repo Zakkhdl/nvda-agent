@@ -1,29 +1,31 @@
-name: Agent NVDA
+name: Agent swing
 
 on:
-  # Toutes les 5 min du lundi au vendredi, de 14h à 22h55 heure de Paris (13h-21h UTC).
-  # L'agent choisit lui-même quoi faire selon l'heure de New York (heure d'été et d'hiver gérées).
+  # Chaque soir de semaine après la clôture de Wall Street.
+  # 21h37 UTC = 22h37 Paris en hiver (16h37 New York), 23h37 Paris en été (17h37 New York).
+  # Le second horaire rattrape un éventuel échec du premier. L'agent ne traite jamais deux fois la même séance.
   schedule:
-    - cron: "*/5 13-21 * * 1-5"
+    - cron: "37 21 * * 1-5"
+    - cron: "17 23 * * 1-5"
   workflow_dispatch:
     inputs:
       mode:
-        description: "test = notification de test, force = analyse immédiate, backtest = mesure sur 60 séances"
+        description: "test = notification de test, apercu = analyse sans rien envoyer, backtest = mesure sur 20 ans, normal = passage du soir"
         type: choice
         default: test
-        options: [test, force, backtest, normal]
+        options: [test, apercu, backtest, normal]
 
 permissions:
   contents: read
 
 concurrency:
-  group: nvda-agent
+  group: agent-swing
   cancel-in-progress: false
 
 jobs:
   analyse:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -39,8 +41,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: nvda-state-${{ github.run_id }}
-          restore-keys: nvda-state-
+          key: swing-state-${{ github.run_id }}
+          restore-keys: swing-state-
 
       - name: Lancer l'agent
         env:
@@ -48,18 +50,18 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          VALEURS: ${{ vars.VALEURS }}
           CAPITAL_EUR: ${{ vars.CAPITAL_EUR }}
           RISQUE_PCT: ${{ vars.RISQUE_PCT }}
+          MAX_POSITIONS: ${{ vars.MAX_POSITIONS }}
           SEUIL_SCORE: ${{ vars.SEUIL_SCORE }}
-          MAX_SIGNAUX_JOUR: ${{ vars.MAX_SIGNAUX_JOUR }}
-          STOP_MIN_ATR: ${{ vars.STOP_MIN_ATR }}
           FRAIS_PCT: ${{ vars.FRAIS_PCT }}
-          SEUIL_MOUVEMENT: ${{ vars.SEUIL_MOUVEMENT }}
+          DUREE_MAX: ${{ vars.DUREE_MAX }}
+          OBJECTIF_R: ${{ vars.OBJECTIF_R }}
         run: |
           case "$MODE" in
             test)     python -m nvda_agent --test ;;
-            force)    python -m nvda_agent --force ;;
+            apercu)   python -m nvda_agent --force --dry-run ;;
             backtest) python -m nvda_agent --backtest ;;
             *)        python -m nvda_agent ;;
           esac
@@ -69,4 +71,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: nvda-state-${{ github.run_id }}
+          key: swing-state-${{ github.run_id }}
